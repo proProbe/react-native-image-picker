@@ -65,6 +65,10 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
   static final int REQUEST_LAUNCH_VIDEO_CAPTURE = 13004;
   static final int REQUEST_LAUNCH_MIXED_LIBRARY = 13005;
 
+  private final String MEDIA_MIXED_TYPE = "mixed";
+  private final String MEDIA_VIDEO_TYPE = "video";
+  private final String MEDIA_IMAGE_TYPE = "image";
+
   private final ReactApplicationContext mReactContext;
   private ImagePickerActivityEventListener mActivityEventListener;
 
@@ -72,14 +76,13 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
   private Callback mCallback;
   private Boolean noData = false;
   private Boolean tmpImage;
-  private Boolean pickVideo = false;
-  private Boolean pickMixedMedia = false;
   private int maxWidth = 0;
   private int maxHeight = 0;
   private int quality = 100;
   private int rotation = 0;
   private int videoQuality = 1;
   private int videoDurationLimit = 0;
+  private String mediaType = MEDIA_IMAGE_TYPE;
   WritableMap response;
 
   public ImagePickerModule(ReactApplicationContext reactContext) {
@@ -217,30 +220,37 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
 
     int requestCode;
     Intent cameraIntent;
-    if (pickMixedMedia) {
-      // TODO: Currently defaults to image. Make it so you can switch between
-      // image and video
-      requestCode = REQUEST_LAUNCH_IMAGE_CAPTURE;
-      cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
-    } else if (pickVideo) {
-      // we create a tmp file to save the result
-      File imageFile = createNewFile();
-      mCameraCaptureURI = Uri.fromFile(imageFile);
-      cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, mCameraCaptureURI);
-      requestCode = REQUEST_LAUNCH_VIDEO_CAPTURE;
-      cameraIntent = new Intent(MediaStore.ACTION_VIDEO_CAPTURE);
-      cameraIntent.putExtra(MediaStore.EXTRA_VIDEO_QUALITY, videoQuality);
-      if (videoDurationLimit > 0) {
-        cameraIntent.putExtra(MediaStore.EXTRA_DURATION_LIMIT, videoDurationLimit);
+    switch(mediaType) {
+      case MEDIA_MIXED_TYPE: {
+        // TODO: Currently defaults to image. Make it so you can switch between
+        // image and video
+        requestCode = REQUEST_LAUNCH_IMAGE_CAPTURE;
+        cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        // we create a tmp file to save the result
+        File imageFile = createNewFile();
+        mCameraCaptureURI = Uri.fromFile(imageFile);
+        cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, mCameraCaptureURI);
+        break;
       }
-    } else {
-      requestCode = REQUEST_LAUNCH_IMAGE_CAPTURE;
-      cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+      case MEDIA_VIDEO_TYPE: {
+        requestCode = REQUEST_LAUNCH_VIDEO_CAPTURE;
+        cameraIntent = new Intent(MediaStore.ACTION_VIDEO_CAPTURE);
+        cameraIntent.putExtra(MediaStore.EXTRA_VIDEO_QUALITY, videoQuality);
+        if (videoDurationLimit > 0) {
+          cameraIntent.putExtra(MediaStore.EXTRA_DURATION_LIMIT, videoDurationLimit);
+        }
+        break;
+      }
+      default: {
+        requestCode = REQUEST_LAUNCH_IMAGE_CAPTURE;
+        cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
 
-      // we create a tmp file to save the result
-      File imageFile = createNewFile();
-      mCameraCaptureURI = Uri.fromFile(imageFile);
-      cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, mCameraCaptureURI);
+        // we create a tmp file to save the result
+        File imageFile = createNewFile();
+        mCameraCaptureURI = Uri.fromFile(imageFile);
+        cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, mCameraCaptureURI);
+        break;
+      }
     }
 
     if (cameraIntent.resolveActivity(mReactContext.getPackageManager()) == null) {
@@ -281,20 +291,27 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
 
     int requestCode;
     Intent libraryIntent;
-    if (pickMixedMedia) {
-      requestCode = REQUEST_LAUNCH_MIXED_LIBRARY;
-      libraryIntent = new Intent(Intent.ACTION_GET_CONTENT);
-      libraryIntent.setType("*/*");
-      String[] mimetypes = {"image/*", "video/*"};
-      libraryIntent.putExtra(Intent.EXTRA_MIME_TYPES, mimetypes);
-    } else if (pickVideo) {
-      requestCode = REQUEST_LAUNCH_VIDEO_LIBRARY;
-      libraryIntent = new Intent(Intent.ACTION_PICK);
-      libraryIntent.setType("video/*");
-    } else {
-      requestCode = REQUEST_LAUNCH_IMAGE_LIBRARY;
-      libraryIntent = new Intent(Intent.ACTION_PICK,
+    switch(mediaType) {
+      case MEDIA_MIXED_TYPE: {
+        requestCode = REQUEST_LAUNCH_MIXED_LIBRARY;
+        libraryIntent = new Intent(Intent.ACTION_GET_CONTENT);
+        libraryIntent.setType("*/*");
+        String[] mimetypes = {"image/*", "video/*"};
+        libraryIntent.putExtra(Intent.EXTRA_MIME_TYPES, mimetypes);
+        break;
+      }
+      case MEDIA_VIDEO_TYPE: {
+        requestCode = REQUEST_LAUNCH_VIDEO_LIBRARY;
+        libraryIntent = new Intent(Intent.ACTION_PICK);
+        libraryIntent.setType("video/*");
+        break;
+      }
+      default: {
+        requestCode = REQUEST_LAUNCH_IMAGE_LIBRARY;
+        libraryIntent = new Intent(Intent.ACTION_PICK,
         MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+        break;
+      }
     }
 
     if (libraryIntent.resolveActivity(mReactContext.getPackageManager()) == null) {
@@ -776,6 +793,19 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
     }
   }
 
+  private Boolean isCorrectMediaType(String mediaType) {
+    switch(mediaType) {
+      case MEDIA_MIXED_TYPE:
+        return true;
+      case MEDIA_IMAGE_TYPE:
+        return true;
+      case MEDIA_VIDEO_TYPE:
+        return true;
+      default:
+        return false;
+    }
+  }
+
   private void parseOptions(final ReadableMap options) {
     noData = false;
     if (options.hasKey("noData")) {
@@ -801,13 +831,9 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
     if (options.hasKey("rotation")) {
       rotation = options.getInt("rotation");
     }
-    pickVideo = false;
-    if (options.hasKey("mediaType") && options.getString("mediaType").equals("video")) {
-      pickVideo = true;
-    }
-    pickMixedMedia = false;
-    if (options.hasKey("mediaType") && options.getString("mediaType").equals("mixed")) {
-      pickMixedMedia = true;
+    mediaType = MEDIA_IMAGE_TYPE;
+    if (options.hasKey("mediaType") && isCorrectMediaType(options.getString("mediaType"))) {
+      mediaType = options.getString("mediaType");
     }
     videoQuality = 1;
     if (options.hasKey("videoQuality") && options.getString("videoQuality").equals("low")) {
