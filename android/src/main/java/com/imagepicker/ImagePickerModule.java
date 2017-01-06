@@ -63,6 +63,7 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
   static final int REQUEST_LAUNCH_IMAGE_LIBRARY = 13002;
   static final int REQUEST_LAUNCH_VIDEO_LIBRARY = 13003;
   static final int REQUEST_LAUNCH_VIDEO_CAPTURE = 13004;
+  static final int REQUEST_LAUNCH_MIXED_LIBRARY = 13005;
 
   private final ReactApplicationContext mReactContext;
   private ImagePickerActivityEventListener mActivityEventListener;
@@ -72,6 +73,7 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
   private Boolean noData = false;
   private Boolean tmpImage;
   private Boolean pickVideo = false;
+  private Boolean pickMixedMedia = false;
   private int maxWidth = 0;
   private int maxHeight = 0;
   private int quality = 100;
@@ -215,7 +217,16 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
 
     int requestCode;
     Intent cameraIntent;
-    if (pickVideo) {
+    if (pickMixedMedia) {
+      // TODO: Currently defaults to image. Make it so you can switch between
+      // image and video
+      requestCode = REQUEST_LAUNCH_IMAGE_CAPTURE;
+      cameraIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+    } else if (pickVideo) {
+      // we create a tmp file to save the result
+      File imageFile = createNewFile();
+      mCameraCaptureURI = Uri.fromFile(imageFile);
+      cameraIntent.putExtra(MediaStore.EXTRA_OUTPUT, mCameraCaptureURI);
       requestCode = REQUEST_LAUNCH_VIDEO_CAPTURE;
       cameraIntent = new Intent(MediaStore.ACTION_VIDEO_CAPTURE);
       cameraIntent.putExtra(MediaStore.EXTRA_VIDEO_QUALITY, videoQuality);
@@ -270,14 +281,20 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
 
     int requestCode;
     Intent libraryIntent;
-    if (pickVideo) {
+    if (pickMixedMedia) {
+      requestCode = REQUEST_LAUNCH_MIXED_LIBRARY;
+      libraryIntent = new Intent(Intent.ACTION_GET_CONTENT);
+      libraryIntent.setType("*/*");
+      String[] mimetypes = {"image/*", "video/*"};
+      libraryIntent.putExtra(Intent.EXTRA_MIME_TYPES, mimetypes);
+    } else if (pickVideo) {
       requestCode = REQUEST_LAUNCH_VIDEO_LIBRARY;
       libraryIntent = new Intent(Intent.ACTION_PICK);
       libraryIntent.setType("video/*");
     } else {
       requestCode = REQUEST_LAUNCH_IMAGE_LIBRARY;
       libraryIntent = new Intent(Intent.ACTION_PICK,
-      MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+        MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
     }
 
     if (libraryIntent.resolveActivity(mReactContext.getPackageManager()) == null) {
@@ -301,7 +318,8 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
     //robustness code
     if (mCallback == null || (mCameraCaptureURI == null && requestCode == REQUEST_LAUNCH_IMAGE_CAPTURE)
             || (requestCode != REQUEST_LAUNCH_IMAGE_CAPTURE && requestCode != REQUEST_LAUNCH_IMAGE_LIBRARY
-            && requestCode != REQUEST_LAUNCH_VIDEO_LIBRARY && requestCode != REQUEST_LAUNCH_VIDEO_CAPTURE)) {
+            && requestCode != REQUEST_LAUNCH_VIDEO_LIBRARY && requestCode != REQUEST_LAUNCH_VIDEO_CAPTURE
+            && requestCode != REQUEST_LAUNCH_MIXED_LIBRARY)) {
       return;
     }
 
@@ -337,6 +355,28 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
         mCallback.invoke(response);
         mCallback = null;
         return;
+      case REQUEST_LAUNCH_MIXED_LIBRARY:
+        String path = getRealPathFromURI(data.getData());
+        String dataUri = data.getData().toString();
+        String mimeType = getMimeTypeFromURI(data.getData());
+        Boolean isVideo = false;
+
+        if (mimeType.startsWith("video")) {
+          isVideo = true;
+        } else {
+          isVideo = false;
+        }
+
+        if (isVideo) {
+          response.putString("uri", dataUri);
+          response.putString("path", path);
+          mCallback.invoke(response);
+          mCallback = null;
+          return;
+        } else {
+          uri = data.getData();
+          break;
+        }
       default:
         uri = null;
     }
@@ -512,17 +552,32 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
 
   private String getRealPathFromURI(Uri uri) {
     String result;
-    String[] projection = {MediaStore.Images.Media.DATA};
+    String[] projection = { MediaStore.Images.Media.DATA };
     Cursor cursor = mReactContext.getContentResolver().query(uri, projection, null, null, null);
     if (cursor == null) { // Source is Dropbox or other similar local file path
       result = uri.getPath();
     } else {
       cursor.moveToFirst();
-      int idx = cursor.getColumnIndexOrThrow(MediaStore.Images.Media.DATA);
+      int idx = cursor.getColumnIndexOrThrow(projection[0]);
       result = cursor.getString(idx);
       cursor.close();
     }
     return result;
+  }
+
+  private String getMimeTypeFromURI(Uri uri) {
+    String mimeType;
+    String[] projection = { MediaStore.Images.Media.MIME_TYPE };
+    Cursor cursor = mReactContext.getContentResolver().query(uri, projection, null, null, null);
+    if (cursor == null) {
+      mimeType = null;
+    } else {
+      cursor.moveToFirst();
+      int idx = cursor.getColumnIndexOrThrow(projection[0]);
+      mimeType = cursor.getString(idx);
+      cursor.close();
+    }
+    return mimeType;
   }
 
   /**
@@ -579,6 +634,25 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
     return Base64.encodeToString(bytes, Base64.NO_WRAP);
   }
 
+    /**
+   * If necessary, set a sample size > 1 to request the decoder to subsample the
+   * original image, returning a smaller image to save memory.
+   */
+  private int getSampleSize(final String realPath) {
+    File file = new File(realPath);
+    int maxMB = 5;
+    long maxByte = maxMB * 1024 * 1024;
+    long length = file.length();
+    int sampleSize = 1;
+
+    while (length > maxByte) {
+      length /= 2;
+      sampleSize *= 2;
+    }
+
+    return sampleSize;
+  }
+
   /**
    * Create a resized image to fulfill the maxWidth/maxHeight, quality and rotation values
    *
@@ -590,6 +664,8 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
   private File getResizedImage(final String realPath, final int initialWidth, final int initialHeight) {
     Options options = new BitmapFactory.Options();
     options.inScaled = false;
+    options.inSampleSize = getSampleSize(realPath);
+
     Bitmap photo = BitmapFactory.decodeFile(realPath, options);
 
     if (photo == null) {
@@ -728,6 +804,10 @@ public class ImagePickerModule extends ReactContextBaseJavaModule {
     pickVideo = false;
     if (options.hasKey("mediaType") && options.getString("mediaType").equals("video")) {
       pickVideo = true;
+    }
+    pickMixedMedia = false;
+    if (options.hasKey("mediaType") && options.getString("mediaType").equals("mixed")) {
+      pickMixedMedia = true;
     }
     videoQuality = 1;
     if (options.hasKey("videoQuality") && options.getString("videoQuality").equals("low")) {
